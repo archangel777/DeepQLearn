@@ -7,6 +7,7 @@ from skimage import transform, color, exposure
 from skimage.transform import rotate
 from skimage.viewer import ImageViewer
 import sys, os
+os.environ['TF_CPP_MIN_LOG_LEVEL']='2'
 sys.path.append("games/flappy/")
 sys.path.append("games/Fake-Arkanoid/")
 #import wrapped_flappy_bird as game_flappy
@@ -20,14 +21,15 @@ import pylab as pl
 
 import json
 from keras import initializers
+from keras import backend as K
 from keras.initializers import normal, identity
 from keras.models import model_from_json
 from keras.models import Sequential
 from keras.layers.core import Dense, Dropout, Activation, Flatten
-from keras.layers.convolutional import Convolution2D, MaxPooling2D
+from keras.layers.convolutional import Conv2D, MaxPooling2D
 from keras.optimizers import SGD , Adam
 import tensorflow as tf
-import theano
+
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 GAME = 'bird' # the name of the game being played for log files
@@ -35,14 +37,15 @@ CONFIG = 'nothreshold'
 ACTIONS = 3 # number of valid actions
 GAMMA = 0.99 # decay rate of past observations
 OBSERVATION = 100. # timesteps to observe before training
-EXPLORE = 2000. # frames over which to anneal epsilon
+EXPLORE = 5000. # frames over which to anneal epsilon
 FINAL_EPSILON = 0.01 # final value of epsilon
-INITIAL_EPSILON = 1 # starting value of epsilon
+INITIAL_EPSILON = 0.3 # starting value of epsilon
 EPSILON_DECAY = (INITIAL_EPSILON - FINAL_EPSILON)/EXPLORE
-REPLAY_MEMORY = 1000000 # number of previous transitions to remember
-BATCH = 32 # size of minibatch
+REPLAY_MEMORY = 2000 # number of previous transitions to remember
+BATCH = 512 # size of minibatch
 FRAME_PER_ACTION = 5
 LEARNING_RATE = 0.0001
+IMG_SHOW_STEP = 100
 
 img_rows , img_cols = 80, 80
 #Convert image into Black and white
@@ -51,22 +54,77 @@ img_channels = 4 #We stack 4 frames
 class MyModel:
     def __init__(self):
         print("Now we build the model")
+        #self.create_default_model()
+        #self.create_simple_model()
+        self.create_hard_model()
+        print("We finish building the model")
+
+    def create_hard_model(self):
         self.model = Sequential()
-        self.first_conv = Convolution2D(32, 4, 4, subsample=(2, 2), border_mode='same',input_shape=(img_rows,img_cols,img_channels))
-        self.model.add(self.first_conv)  #80*80*4
+
+        self.model.add(Conv2D(64, (4, 4), strides=(2, 2), padding="same", input_shape=(img_rows,img_cols,img_channels)))  #80*80*4
+        self.model.add(MaxPooling2D(pool_size=(2, 2)))
+        self.convout1 = Activation('relu')
+        self.model.add(self.convout1)
+        
+        self.model.add(Conv2D(64, (4, 4), strides=(2, 2), padding="same"))
+        self.model.add(MaxPooling2D(pool_size=(2, 2)))
         self.model.add(Activation('relu'))
-        self.model.add(Convolution2D(64, 4, 4, subsample=(2, 2), border_mode='same'))
+        
+        self.model.add(Conv2D(32, (2, 2), strides=(1, 1), padding="same"))
         self.model.add(Activation('relu'))
-        self.model.add(Convolution2D(64, 4, 4, subsample=(2, 2), border_mode='same'))
-        self.model.add(Activation('relu'))
+
         self.model.add(Flatten())
         self.model.add(Dense(512))
+        self.model.add(Activation('relu'))
+        self.model.add(Dense(128))
         self.model.add(Activation('relu'))
         self.model.add(Dense(ACTIONS))
        
         adam = Adam(lr=LEARNING_RATE)
         self.model.compile(loss='mse',optimizer=adam)
-        print("We finish building the model")
+
+    def create_default_model(self):
+        self.model = Sequential()
+
+        self.model.add(Conv2D(32, (4, 4), strides=(2, 2), padding="same", input_shape=(img_rows,img_cols,img_channels)))  #80*80*4
+        self.model.add(MaxPooling2D(pool_size=(2, 2)))
+        self.convout1 = Activation('relu')
+        self.model.add(self.convout1)
+        
+        self.model.add(Conv2D(64, (4, 4), strides=(2, 2), padding="same"))
+        self.model.add(Activation('relu'))
+        
+        self.model.add(Conv2D(64, (2, 2), strides=(1, 1), padding="same"))
+        self.model.add(Activation('relu'))
+
+        self.model.add(Flatten())
+        self.model.add(Dense(128))
+        self.model.add(Activation('relu'))
+        self.model.add(Dense(ACTIONS))
+       
+        adam = Adam(lr=LEARNING_RATE)
+        self.model.compile(loss='mse',optimizer=adam)
+
+    def create_simple_model(self):
+        self.model = Sequential()
+
+        self.model.add(Conv2D(16, (4, 4), strides=(2, 2), padding="same", input_shape=(img_rows,img_cols,img_channels)))  #80*80*4
+        self.model.add(MaxPooling2D(pool_size=(2, 2)))
+        self.convout1 = Activation('relu')
+        self.model.add(self.convout1)
+        
+        self.model.add(Conv2D(16, (2, 2), strides=(2, 2), padding="same"))
+        self.model.add(MaxPooling2D(pool_size=(2, 2)))
+        self.model.add(Activation('relu'))
+
+        self.model.add(Flatten())
+        self.model.add(Dense(64))
+        self.model.add(Activation('relu'))
+        self.model.add(Dense(ACTIONS))
+       
+        adam = Adam(lr=LEARNING_RATE)
+        self.model.compile(loss='mse',optimizer=adam)
 
     def make_mosaic(self, imgs, nrows, ncols, border=1):
         """
@@ -75,6 +133,7 @@ class MyModel:
         """
         nimgs = imgs.shape[0]
         imshape = imgs.shape[1:]
+        print(imshape)
         
         mosaic = ma.masked_all((nrows * imshape[0] + (nrows - 1) * border,
                                 ncols * imshape[1] + (ncols - 1) * border),
@@ -82,7 +141,7 @@ class MyModel:
         
         paddedh = imshape[0] + border
         paddedw = imshape[1] + border
-        for i in xrange(nimgs):
+        for i in range(nimgs):
             row = int(np.floor(i / ncols))
             col = i % ncols
             
@@ -102,6 +161,16 @@ class MyModel:
         cax = divider.append_axes("right", size="5%", pad=0.05)
         im = ax.imshow(data, vmin=vmin, vmax=vmax, interpolation='nearest', cmap=cmap)
         pl.colorbar(im, cax=cax)
+        pl.show()
+
+    def show_conv(self, X):
+        convout1_f = K.function(self.model.inputs, [self.convout1.output])
+        C1 = convout1_f([X])
+        C1 = np.squeeze(C1)
+
+        pl.figure(figsize=(15, 15))
+        pl.suptitle('convout1')
+        self.nice_imshow(pl.gca(), self.make_mosaic(C1, 2, 10), cmap=cm.binary)
 
     def trainNetwork(self, args):
         # open up a game state to communicate with emulator
@@ -120,9 +189,6 @@ class MyModel:
         x_t = skimage.transform.resize(x_t,(img_rows,img_cols), mode='constant')
         #x_t = skimage.exposure.rescale_intensity(x_t,out_range=(0,255))
 
-        #viewer = ImageViewer(x_t)
-        #viewer.show()
-
         s_t = np.stack((x_t, x_t, x_t, x_t), axis=2)
         #print (s_t.shape)
 
@@ -138,10 +204,12 @@ class MyModel:
 
         if args['mode'] == 'Run':
             OBSERVE = 999999999    #We keep observe, never train
-            epsilon = FINAL_EPSILON    
+            epsilon = 0   
         else:                       #We go to training mode
             OBSERVE = OBSERVATION
             epsilon = INITIAL_EPSILON
+            if os.path.isfile("model.h5"):
+                epsilon = FINAL_EPSILON
 
         t = 0
         loss = 0
@@ -174,7 +242,7 @@ class MyModel:
             x_t1_colored, points, terminal_aux = game_state.frame_step(a_t)
             terminal = terminal_aux or terminal
 
-            r_t = points - prev_points if points >= prev_points else -100
+            r_t = points - prev_points if points >= prev_points else -50
             prev_points = points
 
             x_t1 = skimage.color.rgb2gray(x_t1_colored)
@@ -184,6 +252,7 @@ class MyModel:
             x_t1 = x_t1.reshape(1, x_t1.shape[0], x_t1.shape[1], 1) #1x80x80x1
             s_t1 = np.append(x_t1, s_t[:, :, :, :3], axis=3)
 
+            #if t == IMG_SHOW_STEP: self.show_conv(s_t1)
             # store the transition in D
             D.append((s_t, action_index, r_t, s_t1, terminal))
             if len(D) > REPLAY_MEMORY:
@@ -192,7 +261,7 @@ class MyModel:
             #only train if done observing
             if t>0 and t % OBSERVE == 0:
                 #sample a minibatch to train on
-                minibatch = random.sample(D, BATCH)
+                minibatch = random.sample(D, min(BATCH, len(D)))
 
                 inputs = np.zeros((BATCH, s_t.shape[1], s_t.shape[2], s_t.shape[3]))   #32, 80, 80, 4
                 #print (inputs.shape)
@@ -219,15 +288,6 @@ class MyModel:
                     
                 # targets2 = normalize(targets)
                 loss = self.model.train_on_batch(inputs, targets)
-
-                convout1_f = theano.function([self.model.get_input(train=False)], convout1.get_output(train=False))
-                X = minibatch[0][3]
-                C1 = convout1_f(X)
-                C1 = np.squeeze(C1)
-                
-                pl.figure(figsize=(15, 15))
-                pl.suptitle('convout1')
-                nice_imshow(pl.gca(), make_mosaic(C1, 6, 6), cmap=cm.binary)
 
             s_t = s_t1
             t = t + 1
